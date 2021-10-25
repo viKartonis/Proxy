@@ -1,29 +1,16 @@
-#include <ares_build.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <iostream>
 #include "Server.h"
-#include "Client.h"
 
 int main()
 {
     char* hostname = "127.0.0.1";
     try
     {
-        Server server(0, hostname, 1024);
-        Client client;
-        client.connectWithServer(hostname);
+        Server server(8080, hostname, 1024);
 
-        const auto socketId = server.acceptWithClient();
-
-        char *message = "Hello, world!";
-        client.sendToServer(socketId, message, strlen(message));
-
-        auto isClose = 0;
-        while (!isClose)
-        {
-            isClose = server.receiveFromClient();
-        }
+        server.acceptWithClient();
+        server.receiveFromClient();
+        server.sendToClient();
     }
     catch(std::runtime_error& error)
     {
