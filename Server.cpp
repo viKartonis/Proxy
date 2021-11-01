@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <iostream>
 #include "Server.h"
+#include "HTTP.h"
 
 int Server::acceptWithClient()
 {
@@ -40,18 +41,37 @@ int Server::receiveFromClient()
     int total = 0;
     int actuallyReceivedBytes = 0;
 
+    std::string tempMessage;
     while (true)
     {
         actuallyReceivedBytes = recv(_communicationSocket, _message, _messageLen, 0);
         if (actuallyReceivedBytes == -1 || actuallyReceivedBytes == 0 || actuallyReceivedBytes < _messageLen)
         {
+            tempMessage += _message;
             break;
         }
         total += actuallyReceivedBytes;
-        _allMessage += _message;
+        tempMessage += _message;
     }
-
-    std::cout << _allMessage << " ";
+    auto tempMessageLen = tempMessage.length();
+    for(auto i = 0; i < tempMessageLen; ++i)
+    {
+        if(i + 3 < tempMessageLen && tempMessage[i] == '\r' && tempMessage[i+1] == '\n' && tempMessage[i+2] == '\r'
+        && tempMessage[i+3] == '\n')
+        {
+            _request = tempMessage.substr(0, i+4);
+            _data = tempMessage.substr(i+4, tempMessageLen - (i+4));
+        }
+    }
+    auto checkHttpReturnedValue = checkHttp();
+    if(checkHttpReturnedValue == -1)
+    {
+        std::string errorMessage = "It is not a http";
+        close(_acceptedSocket);
+        close(_communicationSocket);
+        throw std::runtime_error(errorMessage);
+    }
+    std::cout << tempMessage << " ";
     return (actuallyReceivedBytes == -1 ? -1 : total);
 }
 
@@ -65,15 +85,15 @@ int Server::sendToClient()
 {
     int total = 0;
     int actuallySentBytes = 0;
+    auto body = std::string("Hello, world!");
+    auto response = std::string("HTTP/1.0 200 OK\nContent-length: ");
+    response += std::to_string(body.length());
+    response += "\nContent-Type: text/html; charset=utf-8\n\n";
+    response += body;
 
-    for(auto i = 0; i < _messageLen; ++i)
+    while(total < response.length())
     {
-        _message[i] = 'a';
-    }
-
-    while(total < _messageLen)
-    {
-        actuallySentBytes = send(_communicationSocket, _message+total, _messageLen-total, 0);
+        actuallySentBytes = send(_communicationSocket, response.data() + total, response.length()-total, 0);
         if(actuallySentBytes == -1)
         {
             break;
@@ -93,4 +113,26 @@ void Server::errorHandler(int errorCode)
         close(_acceptedSocket);
         throw std::runtime_error(errorMessage);
     }
+}
+
+int Server::checkHttp()
+{
+    auto reqLen = _request.length();
+    for(auto i = 0; i < reqLen; ++i)
+    {
+        if(_request[i] == ' ')
+        {
+            auto method = _request.substr(0, i);
+            HTTP http;
+            auto httpMethods = http.getMethods();
+            for(const auto & httpMethod : httpMethods)
+            {
+                if(method == httpMethod)
+                {
+                    return 0;
+                }
+            }
+        }
+    }
+    return -1;
 }

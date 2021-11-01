@@ -11,10 +11,11 @@
 class Server
 {
     char* _message;
-    int _messageLen = 32;
+    int _messageLen = 1024;
     int _acceptedSocket;
     int _communicationSocket;
-    std::string _allMessage;
+    std::string _data;
+    std::string _request;
 
 public:
     Server(unsigned short int port, char* address, size_t backLog);
@@ -22,6 +23,7 @@ public:
     void errorHandler(int errorCode);
     int receiveFromClient();
     int sendToClient();
+    int checkHttp();
     ~Server();
 };
 
