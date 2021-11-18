@@ -6,16 +6,11 @@
 #include <zconf.h>
 #include <arpa/inet.h>
 #include <iostream>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include "Server.h"
 #include "HTTP.h"
-
-int Server::acceptWithClient()
-{
-    auto socket = accept(_acceptedSocket, nullptr, nullptr);
-    errorHandler(socket);
-    _communicationSocket = socket;
-    return socket;
-}
 
 Server::Server(unsigned short int port, char* address, size_t backLog)
 {
@@ -35,16 +30,23 @@ Server::Server(unsigned short int port, char* address, size_t backLog)
     _acceptedSocket = sockDesc;
 }
 
-int Server::receiveFromClient()
+int Server::acceptWithClient()
+{
+    auto socket = accept(_acceptedSocket, nullptr, nullptr);
+    errorHandler(socket);
+    _clientProxySocket = socket;
+    return socket;
+}
+
+int Server::proxyReceive(std::string& tempMessage, int socket)
 {
     _message = new char[_messageLen];
     int total = 0;
     int actuallyReceivedBytes = 0;
 
-    std::string tempMessage;
     while (true)
     {
-        actuallyReceivedBytes = recv(_communicationSocket, _message, _messageLen, 0);
+        actuallyReceivedBytes = recv(socket, _message, _messageLen, 0);
         if (actuallyReceivedBytes == -1 || actuallyReceivedBytes == 0 || actuallyReceivedBytes < _messageLen)
         {
             tempMessage += _message;
@@ -53,6 +55,31 @@ int Server::receiveFromClient()
         total += actuallyReceivedBytes;
         tempMessage += _message;
     }
+    return (actuallyReceivedBytes == -1 ? -1 : total);
+}
+
+int Server::proxySend(const std::string& response, int socket)
+{
+    int total = 0;
+    int actuallySentBytes = 0;
+
+    while(total < response.length())
+    {
+        actuallySentBytes = send(socket, response.data() + total, response.length() - total, 0);
+        if(actuallySentBytes == -1)
+        {
+            break;
+        }
+        total += actuallySentBytes;
+    }
+
+    return (actuallySentBytes == -1 ? -1 : total);
+}
+
+int Server::toServer()
+{
+    std::string tempMessage;
+    proxyReceive(tempMessage,_clientProxySocket);
     auto tempMessageLen = tempMessage.length();
     for(auto i = 0; i < tempMessageLen; ++i)
     {
@@ -63,45 +90,99 @@ int Server::receiveFromClient()
             _data = tempMessage.substr(i+4, tempMessageLen - (i+4));
         }
     }
-    auto checkHttpReturnedValue = checkHttp();
+    std::cout << tempMessage;
+    HTTP http;
+    auto checkHttpReturnedValue = http.checkHttp(_request, _host);
     if(checkHttpReturnedValue == -1)
     {
         std::string errorMessage = "It is not a http";
         close(_acceptedSocket);
-        close(_communicationSocket);
+        close(_clientProxySocket);
         throw std::runtime_error(errorMessage);
     }
+    lookUpHost();
+
+//    _serverProxySocket = socket(_realServer->ai_family, _realServer->ai_socktype, _realServer->ai_protocol);
+//    errorHandler(_serverProxySocket);
+//    auto connectToServerError = connect(_serverProxySocket,_realServer->ai_addr, _realServer->ai_addrlen);
+//    errorHandler(connectToServerError);
+//    proxySend(_message, _serverProxySocket);
+
     std::cout << tempMessage << " ";
-    return (actuallyReceivedBytes == -1 ? -1 : total);
+    return 0;
 }
 
 
-Server::~Server()
+std::string Server::fromServer()
 {
-    delete[] _message;
+    std::string receivedMessage;
+    proxyReceive(receivedMessage,_serverProxySocket);
+    proxySend(receivedMessage, _clientProxySocket);
+    return receivedMessage;
 }
 
-int Server::sendToClient()
+int Server::lookUpHost()
 {
-    int total = 0;
-    int actuallySentBytes = 0;
-    auto body = std::string("Hello, world!");
-    auto response = std::string("HTTP/1.0 200 OK\nContent-length: ");
-    response += std::to_string(body.length());
-    response += "\nContent-Type: text/html; charset=utf-8\n\n";
-    response += body;
-
-    while(total < response.length())
+    auto hostNameSize = _host.size();
+    auto postPos = 0;
+    for(auto i = 0; i < hostNameSize; ++i)
     {
-        actuallySentBytes = send(_communicationSocket, response.data() + total, response.length()-total, 0);
-        if(actuallySentBytes == -1)
+        if(_host[i] == ':')
         {
+            postPos = i;
             break;
         }
-        total += actuallySentBytes;
+    }
+    std::string onlyHost;
+    std::string onlyPort;
+    if(postPos == 0)
+    {
+        onlyHost = _host;
+
+    }
+    else
+    {
+        onlyHost = _host.substr(0, postPos);
+        onlyPort = _host.substr(postPos+1, hostNameSize - postPos - 1);
     }
 
-    return (actuallySentBytes == -1 ? -1 : total);
+    struct addrinfo hints{}, *result, *res;
+    int errcode;
+    _realServerAddress = new char[100];
+    void *ptr;
+
+    memset (&hints, 0, sizeof (hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags |= AI_CANONNAME;
+    if(postPos == 0)
+    {
+        errcode = getaddrinfo(onlyHost.c_str(), nullptr, &hints, &result);
+    }
+    else
+    {
+        errcode = getaddrinfo(onlyHost.c_str(), onlyPort.c_str(), &hints, &result);
+    }
+    if (errcode != 0)
+    {
+        perror ("getaddrinfo");
+        return -1;
+    }
+
+    res = result;
+
+    while (res)
+    {
+        _serverProxySocket = socket(AF_INET, SOCK_STREAM, 0);
+        errorHandler(_serverProxySocket);
+        auto connectToServerError = connect(_serverProxySocket, res->ai_addr, res->ai_addrlen);
+        errorHandler(connectToServerError);
+        proxySend(_message, _serverProxySocket);
+        res = res->ai_next;
+    }
+
+    freeaddrinfo(result);
+    return 0;
 }
 
 void Server::errorHandler(int errorCode)
@@ -115,24 +196,9 @@ void Server::errorHandler(int errorCode)
     }
 }
 
-int Server::checkHttp()
+Server::~Server()
 {
-    auto reqLen = _request.length();
-    for(auto i = 0; i < reqLen; ++i)
-    {
-        if(_request[i] == ' ')
-        {
-            auto method = _request.substr(0, i);
-            HTTP http;
-            auto httpMethods = http.getMethods();
-            for(const auto & httpMethod : httpMethods)
-            {
-                if(method == httpMethod)
-                {
-                    return 0;
-                }
-            }
-        }
-    }
-    return -1;
+    delete[] _message;
+    delete[] _realServerAddress;
 }
+

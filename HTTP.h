@@ -19,6 +19,8 @@ public:
     {
         return _methods;
     }
+    int checkHttp(std::string _request, std::string& host);
+
 };
 
 
